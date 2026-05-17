@@ -206,29 +206,55 @@
     let walletType = null; // 'safe' | 'browser' | 'walletconnect'
 
     // ==========================================
-    // DETECT SAFE ENVIRONMENT
+    // DETECT SAFE ENVIRONMENT & EXTRACT SAFE ADDRESS FROM URL
     // ==========================================
+    let safeWalletAddress = null;
+
     function detectSafeEnvironment() {
-      // Safe Wallet runs in iframe and injects window.ethereum with specific properties
+      // METHOD 1: Check URL for ?safe= parameter (MOST RELIABLE)
+      // URL format: ?safe=base:0x73de8e5c5005f39ef71266D7Ae6EC1338...
+      const urlParams = new URLSearchParams(window.location.search);
+      const safeParam = urlParams.get('safe');
+      if (safeParam) {
+        const parts = safeParam.split(':');
+        const address = parts.length > 1 ? parts[1] : parts[0];
+        if (address && address.startsWith('0x') && address.length === 42) {
+          safeWalletAddress = address;
+          console.log('🏠 Safe address from URL:', safeWalletAddress);
+          return true;
+        }
+      }
+      
+      // METHOD 2: Regex on full URL
+      const match = window.location.href.match(/[?&]safe=[^:]*:(0x[a-fA-F0-9]{40})/);
+      if (match) {
+        safeWalletAddress = match[1];
+        console.log('🏠 Safe address from URL regex:', safeWalletAddress);
+        return true;
+      }
+      
+      // METHOD 3: Check iframe
       if (window.parent !== window) {
-        // We're in an iframe - likely Safe Wallet
-        console.log('In iframe (Safe environment detected)');
-        return true;
-      }
-      
-      // Check for Safe provider markers
-      if (window.ethereum && window.ethereum.isSafe) {
-        console.log('Safe provider detected via isSafe flag');
-        return true;
-      }
-      
-      // Check for Safe Apps SDK
-      if (window.__SAFE_APPS_SDK__) {
-        console.log('Safe Apps SDK detected');
+        console.log('In iframe (Safe environment)');
         return true;
       }
       
       return false;
+    }
+    
+    // Listen for Safe SDK messages (fallback)
+    function initSafeSDKListener() {
+      window.addEventListener('message', (event) => {
+        if (event.data && event.data.params && event.data.params.safeAddress) {
+          if (!safeWalletAddress) {
+            safeWalletAddress = event.data.params.safeAddress;
+            console.log('🏠 Safe address from SDK:', safeWalletAddress);
+          }
+        }
+      });
+      if (window.parent !== window) {
+        window.parent.postMessage({ method: 'getSafeInfo' }, '*');
+      }
     }
 
     // ==========================================
@@ -258,31 +284,40 @@
       renderLoading('Connecting to Safe Wallet...');
       
       try {
-        // In Safe environment, window.ethereum is the Safe provider
-        if (!window.ethereum) {
-          throw new Error('No wallet provider found. Please open this app inside Safe Wallet.');
-        }
-
-        provider = new ethers.BrowserProvider(window.ethereum);
-        const accounts = await provider.send('eth_requestAccounts', []);
-        
-        if (!accounts || accounts.length === 0) {
-          throw new Error('No accounts found in Safe Wallet');
+        // Get Safe address from URL parameter (already extracted by detectSafeEnvironment)
+        if (!safeWalletAddress) {
+          // Try to extract again from URL
+          detectSafeEnvironment();
         }
         
-        account = accounts[0];
-        signer = await provider.getSigner();
+        if (!safeWalletAddress) {
+          throw new Error('Safe address not found in URL. Please open from Safe Apps.');
+        }
         
-        const network = await provider.getNetwork();
-        chainId = Number(network.chainId);
+        // Set up provider for transaction signing
+        if (window.ethereum) {
+          provider = new ethers.BrowserProvider(window.ethereum);
+          signer = await provider.getSigner();
+          
+          // Listen for chain changes
+          window.ethereum.on('chainChanged', handleChainChanged);
+          
+          // Get current chain from provider
+          try {
+            const network = await provider.getNetwork();
+            chainId = Number(network.chainId);
+          } catch (e) {
+            // Use default chain
+          }
+        }
+        
+        // USE SAFE ADDRESS FOR SCANNING (not the connected wallet!)
+        account = safeWalletAddress;
         isSafeWallet = true;
         walletType = 'safe';
 
-        // Listen for changes
-        window.ethereum.on('accountsChanged', handleAccountsChanged);
-        window.ethereum.on('chainChanged', handleChainChanged);
-
         console.log('✅ Connected to Safe:', account);
+        console.log('Chain:', chainId);
         renderHeader();
         scanApprovals();
       } catch (err) {
@@ -590,45 +625,46 @@ Your Safe address will be used automatically!
     }
 
     // ==========================================
-    // INIT - Auto-detect Safe
+    // INIT - Auto-detect Safe from URL
     // ==========================================
     async function init() {
-      // Check if in Safe iframe
-      if (detectSafeEnvironment()) {
-        console.log('🏠 Safe environment detected, auto-connecting...');
+      // Initialize SDK listener for fallback
+      initSafeSDKListener();
+      
+      // Check if in Safe environment (extracts safeWalletAddress from URL)
+      if (detectSafeEnvironment() && safeWalletAddress) {
+        console.log('🏠 Safe environment detected!');
+        console.log('Safe address:', safeWalletAddress);
         renderLoading('Safe Wallet detected. Connecting...');
         
-        // Wait a bit for Safe to initialize
-        await new Promise(r => setTimeout(r, 500));
+        // Wait for Safe to initialize
+        await new Promise(r => setTimeout(r, 300));
         
+        // Set up provider if available
         if (window.ethereum) {
           try {
             provider = new ethers.BrowserProvider(window.ethereum);
-            const accounts = await provider.send('eth_requestAccounts', []);
-            
-            if (accounts && accounts.length > 0) {
-              account = accounts[0];
-              signer = await provider.getSigner();
-              const network = await provider.getNetwork();
-              chainId = Number(network.chainId);
-              isSafeWallet = true;
-              walletType = 'safe';
-
-              window.ethereum.on('accountsChanged', handleAccountsChanged);
-              window.ethereum.on('chainChanged', handleChainChanged);
-
-              console.log('✅ Auto-connected to Safe:', account);
-              renderHeader();
-              scanApprovals();
-              return;
-            }
+            signer = await provider.getSigner();
+            const network = await provider.getNetwork();
+            chainId = Number(network.chainId);
+            window.ethereum.on('chainChanged', handleChainChanged);
           } catch (e) {
-            console.log('Auto-connect failed:', e.message);
+            console.log('Provider setup note:', e.message);
           }
         }
+        
+        // USE SAFE ADDRESS FROM URL (not connected wallet!)
+        account = safeWalletAddress;
+        isSafeWallet = true;
+        walletType = 'safe';
+
+        console.log('✅ Using Safe address:', account);
+        renderHeader();
+        scanApprovals();
+        return;
       }
       
-      // Not in Safe or auto-connect failed
+      // Not in Safe - show welcome
       renderWelcome();
     }
 
