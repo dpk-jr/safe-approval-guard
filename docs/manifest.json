@@ -1,0 +1,9 @@
+{
+  "name": "Safe Approval Guard",
+  "description": "Scan and revoke token approvals for your Safe Wallet",
+  "iconPath": "icon.png",
+  "safeAppsPermissions": {
+    "network": true,
+    "transactions": true
+  }
+}

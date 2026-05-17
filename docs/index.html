@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>🛡️ Safe Approval Guard</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.9.0/ethers.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/spark-md5/3.0.0/spark-md5.min.js"></script>
+  <link rel="manifest" href="manifest.json">
+  <meta name="safe-apps-init" content="true">
   <style>
     :root {
       --bg-primary: #1a1a2e;
@@ -103,62 +104,178 @@
   </div>
 
   <script>
-    // ============ SAFE APPS SDK ============
-    // Minimal Safe Apps SDK implementation (no external deps)
-    const SafeAppsSDK = {
-      _isSafe: false,
-      _safeInfo: null,
-      _postMessage: function(method, params = {}) {
+    // ========================================
+    // SAFE APPS SDK - Proper Implementation
+    // ========================================
+    const SDK_VERSION = 'safe-apps-sdk';
+    const SDK_VERSION_NUM = '1.0.0';
+    
+    // Communication channels
+    const DEV匙Y = {
+      SAME_PAGE: 0,
+      PARENT_POPUP: 1,
+      PARENT_IFRAME: 2,
+    };
+
+    class SafeAppsSDK {
+      constructor() {
+        this._handlers = {};
+        this._idCounter = 0;
+        this._isInitialized = false;
+        this._safeInfo = null;
+        
+        // Listen for messages from Safe
+        window.addEventListener('message', this._handleMessage.bind(this));
+        
+        // Signal ready to Safe
+        this._signalReady();
+      }
+      
+      _generateId() {
+        return ++this._idCounter;
+      }
+      
+      _signalReady() {
+        // Send initialization signal to parent
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            sdkVersion: SDK_VERSION,
+            id: this._generateId(),
+            method: 'onSafeInfoRequest',
+            params: {}
+          }, '*');
+        }
+      }
+      
+      _handleMessage(event) {
+        if (!event.data) return;
+        
+        const { id, method, params, sdkVersion } = event.data;
+        
+        // Handle Safe environment info response
+        if (method === 'onSafeInfo' || method === 'setSafeInfo') {
+          this._isInitialized = true;
+          this._safeInfo = params;
+          this._safeInfo.chainId = typeof params.chainId === 'string' 
+            ? parseInt(params.chainId, 16) 
+            : params.chainId;
+          
+          console.log('Safe Info received:', this._safeInfo);
+          
+          // Dispatch custom event
+          window.dispatchEvent(new CustomEvent('safeInfoReceived', { 
+            detail: this._safeInfo 
+          }));
+        }
+        
+        // Handle transaction response
+        if (method === 'sendTransactions' || method === 'txConfirm') {
+          if (this._handlers[id]) {
+            this._handlers[id](params);
+            delete this._handlers[id];
+          }
+        }
+      }
+      
+      async getSafeInfo() {
+        // If already cached, return
+        if (this._safeInfo) return this._safeInfo;
+        
+        // Request safe info from parent
         return new Promise((resolve, reject) => {
-          const messageId = Math.random().toString(36).substring(7);
+          const id = this._generateId();
           
           const handler = (event) => {
-            if (event.data && event.data.id === messageId) {
+            if (event.data && event.data.id === id && event.data.method === 'onSafeInfo') {
               window.removeEventListener('message', handler);
-              if (event.data.error) {
-                reject(new Error(event.data.error));
-              } else {
-                resolve(event.data.data);
-              }
+              resolve(event.data.params);
             }
           };
           
           window.addEventListener('message', handler);
           
-          window.parent.postMessage({
-            method: method,
-            params: params,
-            id: messageId
-          }, '*');
+          // Send request
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              sdkVersion: SDK_VERSION,
+              id: id,
+              method: 'getSafeInfo',
+              params: {}
+            }, '*');
+          }
           
-          // Timeout after 5s
+          // Timeout
           setTimeout(() => {
             window.removeEventListener('message', handler);
-            reject(new Error('Safe Apps SDK timeout'));
-          }, 5000);
+            reject(new Error('getSafeInfo timeout'));
+          }, 3000);
         });
-      },
-      
-      getSafeInfo: async function() {
-        try {
-          const info = await this._postMessage('getSafeInfo');
-          this._isSafe = true;
-          this._safeInfo = info;
-          return info;
-        } catch (e) {
-          console.log('Not running inside Safe:', e.message);
-          return null;
-        }
-      },
-      
-      sendTransactions: function(txs) {
-        return this._postMessage('sendTransactions', { txs });
-      },
-      
-      isRunningInSafe: function() {
-        return this._isSafe;
       }
-    };
+      
+      async getEnvironmentInfo() {
+        return new Promise((resolve, reject) => {
+          const id = this._generateId();
+          
+          const handler = (event) => {
+            if (event.data && event.data.id === id) {
+              window.removeEventListener('message', handler);
+              resolve(event.data.params);
+            }
+          };
+          
+          window.addEventListener('message', handler);
+          
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              sdkVersion: SDK_VERSION,
+              id: id,
+              method: 'getEnvironmentInfo',
+              params: {}
+            }, '*');
+          }
+          
+          setTimeout(() => {
+            window.removeEventListener('message', handler);
+            reject(new Error('getEnvironmentInfo timeout'));
+          }, 3000);
+        });
+      }
+      
+      sendTransactions(txs) {
+        return new Promise((resolve, reject) => {
+          const id = this._generateId();
+          this._handlers[id] = resolve;
+          
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              sdkVersion: SDK_VERSION,
+              id: id,
+              method: 'sendTransactions',
+              params: { txs }
+            }, '*');
+          } else {
+            reject(new Error('Not running in Safe environment'));
+          }
+          
+          setTimeout(() => {
+            if (this._handlers[id]) {
+              delete this._handlers[id];
+              reject(new Error('Transaction timeout'));
+            }
+          }, 60000);
+        });
+      }
+      
+      isRunningInSafe() {
+        return window.parent !== window;
+      }
+    }
+
+    // Initialize SDK globally
+    const sdk = new SafeAppsSDK();
+    
+    // Expose for debugging
+    window.__safeAppsSDK = sdk;
 
     // ============ CONSTANTS ============
     const CHAINS = {
@@ -166,6 +283,12 @@
       42161: { name: 'Arbitrum', rpc: 'https://arb1.arbitrum.io/rpc', explorer: 'https://arbiscan.io' },
       8453: { name: 'Base', rpc: 'https://mainnet.base.org', explorer: 'https://basescan.org' },
       137: { name: 'Polygon', rpc: 'https://polygon-rpc.com', explorer: 'https://polygonscan.io' },
+      10: { name: 'Optimism', rpc: 'https://mainnet.optimism.io', explorer: 'https://optimistic.etherscan.io' },
+      324: { name: 'zkSync Era', rpc: 'https://zksync-mainnet.g.alchemy.com/v2/demo', explorer: 'https://explorer.zksync.io' },
+      59144: { name: 'Linea', rpc: 'https://linea-mainnet.infura.io/v3/demo', explorer: 'https://lineascan.build' },
+      56: { name: 'BNB Chain', rpc: 'https://bsc-dataseed.binance.org', explorer: 'https://bscscan.com' },
+      43114: { name: 'Avalanche', rpc: 'https://api.avax.network/ext/bc/C/rpc', explorer: 'https://snowtrace.io' },
+      100: { name: 'Gnosis', rpc: 'https://rpc.gnosischain.com', explorer: 'https://gnosisscan.io' },
     };
 
     const TRUSTED_SPENDERS = {
@@ -192,7 +315,6 @@
     const ERC20_ABI = [
       'function allowance(address owner, address spender) view returns (uint256)',
       'function approve(address spender, uint256 amount) returns (bool)',
-      'function name() view returns (string)',
     ];
 
     // ============ STATE ============
@@ -205,31 +327,41 @@
 
     // ============ INIT ============
     async function init() {
-      renderLoading('Checking environment...');
+      renderLoading('Detecting environment...');
       
-      // Check if running inside Safe Wallet
-      try {
-        const info = await SafeAppsSDK.getSafeInfo();
-        if (info) {
-          isSafeWallet = true;
-          safeInfo = info;
-          account = info.safeAddress;
-          chainId = parseInt(info.chainId, 16);
-          
-          console.log('Running inside Safe Wallet:', info);
-          
-          // Use Safe's provider
-          if (window.ethereum) {
-            provider = new ethers.BrowserProvider(window.ethereum);
-            signer = await provider.getSigner();
+      // Check if running inside Safe Wallet via SDK
+      if (sdk.isRunningInSafe()) {
+        console.log('Running inside iframe (potential Safe environment)');
+        
+        try {
+          const info = await sdk.getSafeInfo();
+          if (info && info.safeAddress) {
+            isSafeWallet = true;
+            safeInfo = info;
+            account = info.safeAddress;
+            chainId = typeof info.chainId === 'string' 
+              ? parseInt(info.chainId, 16) 
+              : info.chainId;
+            
+            console.log('Safe Wallet detected:', safeInfo);
+            
+            // For Safe, we use the provider from window.ethereum
+            if (window.ethereum) {
+              provider = new ethers.BrowserProvider(window.ethereum);
+              try {
+                signer = await provider.getSigner();
+              } catch (e) {
+                console.log('Signer not available yet:', e.message);
+              }
+            }
+            
+            renderHeader();
+            scanApprovals();
+            return;
           }
-          
-          renderHeader();
-          scanApprovals();
-          return;
+        } catch (e) {
+          console.log('Safe detection failed:', e.message);
         }
-      } catch (e) {
-        console.log('Not in Safe environment:', e.message);
       }
       
       // Not in Safe - show welcome screen
@@ -238,14 +370,12 @@
 
     // ============ CONNECT ============
     async function connectWallet() {
-      // Try Safe first
       if (isSafeWallet) {
         renderHeader();
         scanApprovals();
         return;
       }
       
-      // Try MetaMask / injected wallet
       if (window.ethereum) {
         try {
           provider = new ethers.BrowserProvider(window.ethereum);
@@ -303,7 +433,8 @@
       renderLoading('Scanning approvals...');
 
       try {
-        const rpcProvider = new ethers.JsonRpcProvider(CHAINS[chainId]?.rpc || CHAINS[1].rpc);
+        const chainConfig = CHAINS[chainId] || CHAINS[1];
+        const rpcProvider = new ethers.JsonRpcProvider(chainConfig.rpc);
         const wallet = ethers.getAddress(account);
         const results = [];
 
@@ -330,7 +461,7 @@
                   });
                 }
               } catch (e) {
-                // Skip spender errors
+                // Skip errors
               }
             }
           } catch (e) {
@@ -346,42 +477,41 @@
 
     // ============ REVOKE ============
     async function revokeApproval(tokenAddress, spender) {
-      if (!signer && !isSafeWallet) {
-        alert('Please connect your wallet first!');
-        return;
-      }
+      // Build transaction data
+      const erc20Interface = new ethers.Interface(ERC20_ABI);
+      const data = erc20Interface.encodeFunctionData('approve', [spender, 0]);
+      
+      const tx = {
+        to: tokenAddress,
+        value: '0',
+        data: data,
+        operation: 0, // CALL
+      };
 
-      // If running in Safe, send transaction via Safe Apps SDK
+      // If running in Safe, send via SDK
       if (isSafeWallet) {
         try {
-          const erc20Interface = new ethers.Interface(ERC20_ABI);
-          const data = erc20Interface.encodeFunctionData('approve', [spender, 0]);
-          
-          const tx = {
-            to: tokenAddress,
-            value: '0',
-            data: data,
-          };
-          
-          const result = await SafeAppsSDK.sendTransactions([tx]);
-          alert('Revoke transaction submitted to Safe!\nHash: ' + JSON.stringify(result));
-          
-          // Rescan after short delay
-          setTimeout(scanApprovals, 2000);
+          const result = await sdk.sendTransactions([tx]);
+          alert('Revoke transaction submitted to Safe for multi-sig approval!\n\nTransaction ID: ' + JSON.stringify(result));
+          setTimeout(scanApprovals, 3000);
         } catch (err) {
           alert('Safe revoke failed: ' + err.message);
         }
         return;
       }
 
-      // Regular wallet revoke
+      // Regular wallet
+      if (!signer) {
+        alert('Please connect your wallet first!');
+        return;
+      }
+
       try {
         const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-        const tx = await contract.approve(spender, 0);
+        const txResult = await contract.approve(spender, 0);
         
-        alert('Revocation tx submitted! Hash: ' + tx.hash);
-        await tx.wait();
-        
+        alert('Revocation tx submitted! Hash: ' + txResult.hash);
+        await txResult.wait();
         alert('Revocation confirmed!');
         scanApprovals();
       } catch (err) {
@@ -395,13 +525,12 @@
       
       if (account) {
         const shortAddr = account.slice(0, 6) + '...' + account.slice(-4);
-        const chainName = CHAINS[chainId]?.name || `Chain ${chainId}`;
         const safeBadge = isSafeWallet ? '<span class="safe-badge">🏠 Safe Wallet</span>' : '';
         
         actionsEl.innerHTML = `
           <div class="wallet-info">
             ${safeBadge}
-            <select onchange="switchChain(this.value)">
+            <select onchange="switchChain(this.value)" ${isSafeWallet ? 'disabled' : ''}>
               ${Object.entries(CHAINS).map(([id, chain]) => 
                 `<option value="${id}" ${id == chainId ? 'selected' : ''}>${chain.name}</option>`
               ).join('')}
@@ -447,7 +576,7 @@
       document.getElementById('content').innerHTML = `
         ${isSafeWallet ? `
           <div class="alert alert-info">
-            🏠 <strong>Running inside Safe Wallet</strong> — Revoke transactions will be submitted as Safe proposals for multi-sig approval.
+            🏠 <strong>Safe Wallet Connected</strong> — Revoke transactions will be submitted as multi-sig proposals for owner approval.
           </div>
         ` : ''}
         <div class="summary">
@@ -502,17 +631,6 @@
             </table>
           `}
         </div>
-        ${!isSafeWallet ? `
-          <div class="card">
-            <h3 class="card-title">🏠 Safe Wallet Users</h3>
-            <p style="color: var(--text-secondary); margin-top: 8px;">
-              This dApp is Safe Wallet compatible! Open this app inside Safe Wallet to create multi-sig revoke proposals.
-            </p>
-            <a href="https://app.safe.global/apps/open?safe=eth:0x...&url=${encodeURIComponent(window.location.href)}" target="_blank" class="btn btn-safe" style="margin-top: 16px;">
-              Open in Safe Apps →
-            </a>
-          </div>
-        ` : ''}
       `;
     }
 
@@ -541,7 +659,7 @@
               <div class="connect-card" onclick="openInSafe()">
                 <div class="connect-icon">🏠</div>
                 <h3>Safe Wallet</h3>
-                <p>Open in Safe Apps (multi-sig)</p>
+                <p>Open as Safe App (multi-sig)</p>
               </div>
             </div>
           </div>
@@ -553,27 +671,26 @@
             <li>🎯 Risk scoring: 🟢 Safe / 🟡 Unknown / 🔴 Risky</li>
             <li>🚫 Revoke unlimited or risky approvals</li>
             <li>🏠 Safe Wallet compatible (multi-sig proposals)</li>
-            <li>⛓️ Multi-chain: Ethereum, Arbitrum, Base, Polygon</li>
+            <li>⛓️ Multi-chain: ETH, Arbitrum, Base, Polygon, Optimism, and more</li>
           </ul>
         </div>
         <div class="card">
           <h3 class="card-title">🏠 How to use with Safe Wallet</h3>
           <ol style="margin-top: 16px; color: var(--text-secondary); line-height: 2;">
-            <li>Open your Safe Wallet at <a href="https://app.safe.global" target="_blank" style="color: var(--safe-blue);">app.safe.global</a></li>
-            <li>Go to "Apps" tab</li>
-            <li>Click "Add custom Safe App"</li>
-            <li>Paste this URL: <code style="background: var(--bg-secondary); padding: 4px 8px; border-radius: 4px;">${window.location.href}</code></li>
-            <li>Connect and scan your approvals</li>
-            <li>Revoke transactions will be multi-sig proposals!</li>
+            <li>Open your Safe at <a href="https://app.safe.global" target="_blank" style="color: var(--safe-blue);">app.safe.global</a></li>
+            <li>Go to <strong>Apps</strong> tab</li>
+            <li>Click <strong>"Add custom Safe App"</strong></li>
+            <li>Paste URL: <code style="background: var(--bg-secondary); padding: 4px 8px; border-radius: 4px;">${window.location.href}</code></li>
+            <li>Click <strong>"Add"</strong> and connect</li>
+            <li>Revoke transactions will be multi-sig proposals ✓</li>
           </ol>
         </div>
       `;
     }
 
     function openInSafe() {
-      // Generate Safe Apps URL
-      const safeUrl = `https://app.safe.global/apps/open?safe=eth:0x...&url=${encodeURIComponent(window.location.href)}`;
-      window.open(safeUrl, '_blank');
+      const currentUrl = encodeURIComponent(window.location.href);
+      window.open(`https://app.safe.global/apps/open?safe=eth:0x...&url=${currentUrl}`, '_blank');
     }
 
     // ============ START ============
