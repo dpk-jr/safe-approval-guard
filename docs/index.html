@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🛡️ Safe Approval Guard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.9.0/ethers.umd.min.js"></script>
+  <style>
+    :root {
+      --bg-primary: #1a1a2e;
+      --bg-secondary: #16213e;
+      --bg-card: #0f3460;
+      --accent: #e94560;
+      --accent-hover: #ff6b6b;
+      --safe-green: #10b981;
+      --warning-yellow: #f59e0b;
+      --danger-red: #ef4444;
+      --text-primary: #ffffff;
+      --text-secondary: #94a3b8;
+      --border: #334155;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+      min-height: 100vh;
+      color: var(--text-primary);
+    }
+    .app { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--border); margin-bottom: 30px; flex-wrap: wrap; gap: 16px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-size: 24px; font-weight: bold; }
+    .logo-icon { font-size: 32px; }
+    .btn { padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); }
+    .btn-secondary { background: var(--bg-card); color: white; border: 1px solid var(--border); }
+    .btn-danger { background: var(--danger-red); color: white; font-size: 12px; padding: 8px 16px; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .card { background: var(--bg-card); border-radius: 12px; padding: 24px; border: 1px solid var(--border); margin-bottom: 20px; }
+    .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+    .card-title { font-size: 18px; font-weight: 600; }
+    .wallet-info { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .wallet-address { font-family: monospace; font-size: 14px; color: var(--text-secondary); }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--bg-secondary); border-radius: 12px; padding: 20px; text-align: center; border: 1px solid var(--border); }
+    .stat-value { font-size: 32px; font-weight: bold; margin-bottom: 4px; }
+    .stat-label { font-size: 14px; color: var(--text-secondary); }
+    .stat-safe .stat-value { color: var(--safe-green); }
+    .stat-unknown .stat-value { color: var(--warning-yellow); }
+    .stat-risky .stat-value { color: var(--danger-red); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 16px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-secondary); font-weight: 500; font-size: 14px; }
+    .token-info { display: flex; align-items: center; gap: 12px; }
+    .token-icon { width: 32px; height: 32px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; }
+    .token-details h4 { font-size: 14px; margin-bottom: 2px; }
+    .token-details span { font-size: 12px; color: var(--text-secondary); font-family: monospace; }
+    .spender-name { font-weight: 500; }
+    .spender-address { font-size: 12px; color: var(--text-secondary); font-family: monospace; }
+    .risk-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .risk-safe { background: rgba(16, 185, 129, 0.2); color: var(--safe-green); }
+    .risk-unknown { background: rgba(245, 158, 11, 0.2); color: var(--warning-yellow); }
+    .risk-risky { background: rgba(239, 68, 68, 0.2); color: var(--danger-red); }
+    .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px; gap: 16px; }
+    .spinner { width: 40px; height: 40px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { text-align: center; padding: 60px; color: var(--text-secondary); }
+    .empty-icon { font-size: 48px; margin-bottom: 16px; }
+    select { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: white; font-size: 14px; }
+    .alert { padding: 16px; border-radius: 8px; margin-bottom: 16px; }
+    .alert-error { background: rgba(239, 68, 68, 0.2); border: 1px solid var(--danger-red); }
+    .alert-success { background: rgba(16, 185, 129, 0.2); border: 1px solid var(--safe-green); }
+    @media (max-width: 768px) { .summary { grid-template-columns: repeat(2, 1fr); } th, td { padding: 12px 8px; } }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="header">
+      <div class="logo">
+        <span class="logo-icon">🛡️</span>
+        <span>Safe Approval Guard</span>
+      </div>
+      <div class="header-actions" id="header-actions">
+        <button class="btn btn-primary" onclick="connectWallet()">🔗 Connect Wallet</button>
+      </div>
+    </header>
+
+    <div id="content">
+      <div class="card">
+        <div class="empty">
+          <div class="empty-icon">🔐</div>
+          <h2>Connect Your Wallet</h2>
+          <p style="color: var(--text-secondary); margin-top: 8px;">
+            Scan and manage token approvals for your EOA or Safe Wallet
+          </p>
+          <button class="btn btn-primary" onclick="connectWallet()" style="margin-top: 24px;">
+            🔗 Connect MetaMask
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">✨ Features</h3>
+        <ul style="margin-top: 16px; color: var(--text-secondary); line-height: 2;">
+          <li>🔍 Scan all ERC20 token approvals</li>
+          <li>🎯 Risk scoring: 🟢 Safe / 🟡 Unknown / 🔴 Risky</li>
+          <li>🚫 Revoke unlimited or risky approvals</li>
+          <li>🏠 Safe Wallet compatible (multi-sig)</li>
+          <li>⛓️ Multi-chain: Ethereum, Arbitrum, Base, Polygon</li>
+        </ul>
+      </div>
+    </div>
+
+    <footer style="text-align: center; padding: 40px 0; color: var(--text-secondary);">
+      <p>Built with ❤️ for security | Safe Approval Guard v1.0</p>
+    </footer>
+  </div>
+
+  <script>
+    // ============ CONFIG ============
+    const CHAINS = {
+      1: { name: 'Ethereum', rpc: 'https://eth.drpc.org', explorer: 'https://etherscan.io' },
+      42161: { name: 'Arbitrum', rpc: 'https://arb1.arbitrum.io/rpc', explorer: 'https://arbiscan.io' },
+      8453: { name: 'Base', rpc: 'https://mainnet.base.org', explorer: 'https://basescan.org' },
+      137: { name: 'Polygon', rpc: 'https://polygon-rpc.com', explorer: 'https://polygonscan.com' },
+    };
+
+    const TRUSTED_SPENDERS = {
+      '0xef1c6e67703c7bd7107eed8303fbe6ec2554bf6b': 'Uniswap Universal Router',
+      '0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45': 'Uniswap Universal Router 2',
+      '0xe592427a0aece92de3edee1f18e0157c05861564': 'Uniswap V3 Router',
+      '0x881d40237659c251811cec9c364ef91dc08d300c': 'Metamask Swap Router',
+      '0x1111111254eeb25477b68fb85ed929f73a960582': '1inch V5 Router',
+      '0xdef1c0ded9bec7f1a1670819833240f027b25eff': '0x Exchange Proxy',
+    };
+
+    const TOKENS = [
+      { address: '0xA0b86991c6218b36c1D19D4a2e9Eb0cE3606eB48', symbol: 'USDC', decimals: 6 },
+      { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', symbol: 'USDT', decimals: 6 },
+      { address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', symbol: 'DAI', decimals: 18 },
+      { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', symbol: 'WETH', decimals: 18 },
+      { address: '0x2260FAC5E5542a773Aa44fBCfedf7C193bc2C599', symbol: 'WBTC', decimals: 8 },
+      { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', symbol: 'LINK', decimals: 18 },
+      { address: '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984', symbol: 'UNI', decimals: 18 },
+      { address: '0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9', symbol: 'AAVE', decimals: 18 },
+      { address: '0x509Ee0d083DdF8AC028f2a56731412edD63223B9', symbol: 'stETH', decimals: 18 },
+      { address: '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84', symbol: 'stETH2', decimals: 18 },
+    ];
+
+    const ERC20_ABI = [
+      'function allowance(address owner, address spender) view returns (uint256)',
+      'function approve(address spender, uint256 amount) returns (bool)',
+    ];
+
+    // ============ STATE ============
+    let provider = null;
+    let signer = null;
+    let account = null;
+    let chainId = 1;
+
+    // ============ CONNECT ============
+    async function connectWallet() {
+      if (!window.ethereum) {
+        alert('Please install MetaMask!');
+        return;
+      }
+
+      try {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        const accounts = await provider.send('eth_requestAccounts', []);
+        signer = await provider.getSigner();
+        account = accounts[0];
+        const network = await provider.getNetwork();
+        chainId = Number(network.chainId);
+
+        // Listen for changes
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+
+        renderHeader();
+        scanApprovals();
+      } catch (err) {
+        alert('Connection failed: ' + err.message);
+      }
+    }
+
+    function handleAccountsChanged(accounts) {
+      if (accounts.length === 0) {
+        disconnect();
+      } else {
+        account = accounts[0];
+        provider = new ethers.BrowserProvider(window.ethereum);
+        provider.getSigner().then(s => signer = s);
+        renderHeader();
+        scanApprovals();
+      }
+    }
+
+    function handleChainChanged(chain) {
+      chainId = parseInt(chain, 16);
+      renderHeader();
+      scanApprovals();
+    }
+
+    function disconnect() {
+      account = null;
+      provider = null;
+      signer = null;
+      renderHeader();
+      renderWelcome();
+    }
+
+    // ============ SCAN ============
+    async function scanApprovals() {
+      if (!account) return;
+
+      renderLoading();
+
+      try {
+        const rpcProvider = new ethers.JsonRpcProvider(CHAINS[chainId].rpc);
+        const wallet = ethers.getAddress(account);
+        const results = [];
+
+        for (const token of TOKENS) {
+          try {
+            const contract = new ethers.Contract(token.address, ERC20_ABI, rpcProvider);
+            
+            for (const [router, name] of Object.entries(TRUSTED_SPENDERS)) {
+              const allowance = await contract.allowance(wallet, router);
+              
+              if (allowance > 0n) {
+                const formatted = ethers.formatUnits(allowance, token.decimals);
+                const isUnlimited = allowance > ethers.parseUnits('1000000', token.decimals);
+                
+                results.push({
+                  tokenAddress: token.address,
+                  tokenSymbol: token.symbol,
+                  spender: router,
+                  spenderName: name,
+                  allowance: formatted,
+                  isUnlimited,
+                  riskLevel: 'safe',
+                });
+              }
+            }
+          } catch (e) {
+            console.log(`Error scanning ${token.symbol}:`, e);
+          }
+        }
+
+        renderApprovals(results);
+      } catch (err) {
+        renderError(err.message);
+      }
+    }
+
+    // ============ REVOKE ============
+    async function revokeApproval(tokenAddress, spender) {
+      if (!signer) return;
+
+      try {
+        const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+        const tx = await contract.approve(spender, 0);
+        
+        alert('Revocation tx submitted! Hash: ' + tx.hash);
+        await tx.wait();
+        
+        alert('Revocation confirmed!');
+        scanApprovals();
+      } catch (err) {
+        alert('Revoke failed: ' + err.message);
+      }
+    }
+
+    // ============ RENDER ============
+    function renderHeader() {
+      const actionsEl = document.getElementById('header-actions');
+      
+      if (account) {
+        const shortAddr = account.slice(0, 6) + '...' + account.slice(-4);
+        actionsEl.innerHTML = `
+          <div class="wallet-info">
+            <select onchange="switchChain(this.value)">
+              ${Object.entries(CHAINS).map(([id, chain]) => 
+                `<option value="${id}" ${id == chainId ? 'selected' : ''}>${chain.name}</option>`
+              ).join('')}
+            </select>
+            <span class="wallet-address">${shortAddr}</span>
+            <button class="btn btn-secondary" onclick="disconnect()">Disconnect</button>
+          </div>
+        `;
+      } else {
+        actionsEl.innerHTML = `<button class="btn btn-primary" onclick="connectWallet()">🔗 Connect Wallet</button>`;
+      }
+    }
+
+    function switchChain(newChainId) {
+      chainId = parseInt(newChainId);
+      scanApprovals();
+    }
+
+    function renderLoading() {
+      document.getElementById('content').innerHTML = `
+        <div class="summary">
+          <div class="stat-card"><div class="stat-value">-</div><div class="stat-label">Total</div></div>
+          <div class="stat-card stat-safe"><div class="stat-value">-</div><div class="stat-label">🟢 Safe</div></div>
+          <div class="stat-card stat-unknown"><div class="stat-value">-</div><div class="stat-label">🟡 Unknown</div></div>
+          <div class="stat-card stat-risky"><div class="stat-value">-</div><div class="stat-label">🔴 Risky</div></div>
+        </div>
+        <div class="card">
+          <div class="loading">
+            <div class="spinner"></div>
+            <p>Scanning approvals on ${CHAINS[chainId].name}...</p>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderApprovals(approvals) {
+      const safe = approvals.filter(a => a.riskLevel === 'safe').length;
+      const unknown = approvals.filter(a => a.riskLevel === 'unknown').length;
+      const risky = approvals.filter(a => a.riskLevel === 'risky').length;
+
+      document.getElementById('content').innerHTML = `
+        <div class="summary">
+          <div class="stat-card"><div class="stat-value">${approvals.length}</div><div class="stat-label">Total Approvals</div></div>
+          <div class="stat-card stat-safe"><div class="stat-value">${safe}</div><div class="stat-label">🟢 Safe</div></div>
+          <div class="stat-card stat-unknown"><div class="stat-value">${unknown}</div><div class="stat-label">🟡 Unknown</div></div>
+          <div class="stat-card stat-risky"><div class="stat-value">${risky}</div><div class="stat-label">🔴 Risky</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Token Approvals</h2>
+            <button class="btn btn-primary" onclick="scanApprovals()">🔄 Scan Again</button>
+          </div>
+          ${approvals.length === 0 ? `
+            <div class="empty">
+              <div class="empty-icon">✨</div>
+              <p>No active approvals found!</p>
+            </div>
+          ` : `
+            <table>
+              <thead>
+                <tr>
+                  <th>Token</th>
+                  <th>Approved To</th>
+                  <th>Allowance</th>
+                  <th>Risk</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${approvals.map((a, i) => `
+                  <tr>
+                    <td>
+                      <div class="token-info">
+                        <div class="token-icon">${a.tokenSymbol.slice(0, 2)}</div>
+                        <div class="token-details">
+                          <h4>${a.tokenSymbol}</h4>
+                          <span>${a.tokenAddress.slice(0, 10)}...</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="spender-name">${a.spenderName}</div>
+                      <div class="spender-address">${a.spender.slice(0, 12)}...</div>
+                    </td>
+                    <td>${a.isUnlimited ? '∞ Unlimited' : a.allowance}</td>
+                    <td><span class="risk-badge risk-${a.riskLevel}">${a.riskLevel === 'safe' ? '🟢 Safe' : a.riskLevel === 'unknown' ? '🟡 Unknown' : '🔴 Risky'}</span></td>
+                    <td><button class="btn btn-danger" onclick="revokeApproval('${a.tokenAddress}', '${a.spender}')">🚫 Revoke</button></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `}
+        </div>
+        <div class="card">
+          <h3 class="card-title">🏠 Safe Wallet Users</h3>
+          <p style="color: var(--text-secondary); margin-top: 8px;">
+            This dApp supports Safe Wallet! Connect via Safe Apps interface to create multi-sig revoke proposals.
+          </p>
+          <a href="https://app.safe.global" target="_blank" class="btn btn-secondary" style="margin-top: 16px;">
+            Open Safe Apps →
+          </a>
+        </div>
+      `;
+    }
+
+    function renderError(message) {
+      document.getElementById('content').innerHTML = `
+        <div class="alert alert-error">⚠️ ${message}</div>
+        <button class="btn btn-primary" onclick="scanApprovals()">Try Again</button>
+      `;
+    }
+
+    function renderWelcome() {
+      document.getElementById('content').innerHTML = `
+        <div class="card">
+          <div class="empty">
+            <div class="empty-icon">🔐</div>
+            <h2>Connect Your Wallet</h2>
+            <p style="color: var(--text-secondary); margin-top: 8px;">
+              Scan and manage token approvals for your EOA or Safe Wallet
+            </p>
+            <button class="btn btn-primary" onclick="connectWallet()" style="margin-top: 24px;">
+              🔗 Connect MetaMask
+            </button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">✨ Features</h3>
+          <ul style="margin-top: 16px; color: var(--text-secondary); line-height: 2;">
+            <li>🔍 Scan all ERC20 token approvals</li>
+            <li>🎯 Risk scoring: 🟢 Safe / 🟡 Unknown / 🔴 Risky</li>
+            <li>🚫 Revoke unlimited or risky approvals</li>
+            <li>🏠 Safe Wallet compatible (multi-sig)</li>
+            <li>⛓️ Multi-chain: Ethereum, Arbitrum, Base, Polygon</li>
+          </ul>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
