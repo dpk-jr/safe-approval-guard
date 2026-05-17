@@ -1,0 +1,1 @@
+# Safe Approval Guard
