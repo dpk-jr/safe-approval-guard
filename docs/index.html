@@ -35,6 +35,7 @@
     .btn-primary { background: var(--accent); color: white; }
     .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); }
     .btn-safe { background: var(--safe-blue); color: white; }
+    .btn-safe:hover { background: #0099ff; }
     .btn-secondary { background: var(--bg-card); color: white; border: 1px solid var(--border); }
     .btn-danger { background: var(--danger-red); color: white; font-size: 12px; padding: 8px 16px; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -74,13 +75,22 @@
     .alert-error { background: rgba(239, 68, 68, 0.2); border: 1px solid var(--danger-red); }
     .alert-success { background: rgba(16, 185, 129, 0.2); border: 1px solid var(--safe-green); }
     .alert-info { background: rgba(0, 128, 255, 0.2); border: 1px solid var(--safe-blue); }
-    .connect-options { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 24px; }
-    .connect-card { background: var(--bg-secondary); border-radius: 12px; padding: 24px; border: 1px solid var(--border); text-align: center; min-width: 200px; cursor: pointer; transition: all 0.2s; }
-    .connect-card:hover { border-color: var(--accent); transform: translateY(-4px); }
-    .connect-card h3 { margin-top: 16px; font-size: 18px; }
-    .connect-card p { color: var(--text-secondary); font-size: 14px; margin-top: 8px; }
-    .connect-icon { font-size: 48px; }
-    @media (max-width: 768px) { .summary { grid-template-columns: repeat(2, 1fr); } th, td { padding: 12px 8px; } .connect-options { flex-direction: column; } }
+    
+    /* Wallet Modal - Revoke.cash style */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: var(--bg-card); border-radius: 16px; padding: 32px; max-width: 420px; width: 90%; border: 1px solid var(--border); }
+    .modal h2 { text-align: center; margin-bottom: 24px; font-size: 24px; }
+    .wallet-options { display: flex; flex-direction: column; gap: 12px; }
+    .wallet-option { display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--bg-secondary); border-radius: 12px; border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; }
+    .wallet-option:hover { border-color: var(--accent); transform: translateX(4px); }
+    .wallet-option img { width: 48px; height: 48px; border-radius: 8px; }
+    .wallet-option-text h3 { font-size: 16px; margin-bottom: 4px; }
+    .wallet-option-text p { font-size: 12px; color: var(--text-secondary); }
+    .wallet-icon { width: 48px; height: 48px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 24px; background: var(--bg-card); }
+    .modal-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 24px; }
+    
+    @media (max-width: 768px) { .summary { grid-template-columns: repeat(2, 1fr); } th, td { padding: 12px 8px; } }
   </style>
 </head>
 <body>
@@ -91,112 +101,62 @@
         <span>Safe Approval Guard</span>
       </div>
       <div class="header-actions" id="header-actions">
-        <button class="btn btn-primary" id="connectBtn" onclick="connectWallet()">🔗 Connect Wallet</button>
+        <button class="btn btn-primary" onclick="openConnectModal()">🔗 Connect Wallet</button>
       </div>
     </header>
     <div id="content"></div>
   </div>
 
+  <!-- Connect Modal - Revoke.cash style -->
+  <div class="modal-overlay" id="connectModal">
+    <div class="modal">
+      <h2>Connect Your Wallet</h2>
+      <div class="wallet-options">
+        <!-- Safe Wallet (shown first when in iframe) -->
+        <div class="wallet-option" id="safeOption" onclick="connectSafe()" style="display: none;">
+          <div class="wallet-icon">🏠</div>
+          <div class="wallet-option-text">
+            <h3>Safe Wallet</h3>
+            <p>Connect with your Safe multisig wallet</p>
+          </div>
+        </div>
+        
+        <!-- Browser Wallet (MetaMask, etc) -->
+        <div class="wallet-option" onclick="connectBrowserWallet()">
+          <div class="wallet-icon">🦊</div>
+          <div class="wallet-option-text">
+            <h3>Browser Wallet</h3>
+            <p>MetaMask, Coinbase Wallet, Brave Wallet, etc.</p>
+          </div>
+        </div>
+        
+        <!-- WalletConnect -->
+        <div class="wallet-option" onclick="connectWalletConnect()">
+          <div class="wallet-icon">📲</div>
+          <div class="wallet-option-text">
+            <h3>WalletConnect</h3>
+            <p>Scan with mobile wallet to connect</p>
+          </div>
+        </div>
+        
+        <!-- Safe (Manual) -->
+        <div class="wallet-option" onclick="showSafeInstructions()">
+          <div class="wallet-icon">🔐</div>
+          <div class="wallet-option-text">
+            <h3>Safe (Add as App)</h3>
+            <p>Add this dApp to your Safe Wallet</p>
+          </div>
+        </div>
+      </div>
+      <p style="text-align: center; margin-top: 20px; color: var(--text-secondary); font-size: 14px;">
+        <a href="https://app.safe.global" target="_blank" style="color: var(--safe-blue);">Don't have Safe? Create one →</a>
+      </p>
+    </div>
+  </div>
+
   <script>
     // ==========================================
-    // SAFE APPS SDK - Official Protocol v1.0
-    // ==========================================
-    const REQUEST_ID = 'safe-apps-sdk';
-    
-    let _messageId = 0;
-    let _pendingRequests = new Map();
-    let _safeInfo = null;
-    let _isSafeEnvironment = false;
-
-    // Listen for messages from Safe
-    window.addEventListener('message', (event) => {
-      if (!event.data) return;
-      
-      const { id, method, params, ...rest } = event.data;
-      
-      // Safe sends info when app loads
-      if (method === 'setSafeInfo' || method === 'onSafeInfo') {
-        _isSafeEnvironment = true;
-        _safeInfo = {
-          safeAddress: params.safeAddress,
-          chainId: parseInt(params.chainId, 16),
-          owners: params.owners || [],
-          threshold: params.threshold || 1,
-          isReadOnly: params.isReadOnly || false,
-        };
-        console.log('✅ Safe detected:', _safeInfo);
-        
-        // Notify app
-        window.dispatchEvent(new CustomEvent('safeInfoReady', { detail: _safeInfo }));
-      }
-      
-      // Response to our requests
-      if (id && _pendingRequests.has(id)) {
-        const { resolve, reject } = _pendingRequests.get(id);
-        _pendingRequests.delete(id);
-        
-        if (rest.error) {
-          reject(new Error(rest.error));
-        } else {
-          resolve(params || rest);
-        }
-      }
-    });
-
-    // Send message to Safe parent
-    function sendToSafe(method, params = {}) {
-      return new Promise((resolve, reject) => {
-        const id = `req_${++_messageId}`;
-        _pendingRequests.set(id, { resolve, reject });
-        
-        window.parent.postMessage({
-          jsonrpc: '2.0',
-          id: id,
-          method: method,
-          params: params,
-        }, '*');
-        
-        setTimeout(() => {
-          if (_pendingRequests.has(id)) {
-            _pendingRequests.delete(id);
-            reject(new Error(`Request timeout: ${method}`));
-          }
-        }, 30000);
-      });
-    }
-
-    // Get Safe info
-    async function getSafeInfo() {
-      if (_safeInfo) return _safeInfo;
-      
-      try {
-        const info = await sendToSafe('getSafeInfo');
-        _isSafeEnvironment = true;
-        _safeInfo = {
-          safeAddress: info.safeAddress,
-          chainId: parseInt(info.chainId, 16),
-          owners: info.owners || [],
-          threshold: info.threshold || 1,
-        };
-        return _safeInfo;
-      } catch (e) {
-        console.log('Not in Safe environment:', e.message);
-        return null;
-      }
-    }
-
-    // Send transaction via Safe
-    async function sendSafeTransactions(txs) {
-      return sendToSafe('sendTransactions', { txs });
-    }
-
-    // Check if running in iframe (potential Safe)
-    function isInIframe() {
-      return window.parent !== window;
-    }
-
-    // ==========================================
-    // CHAINS CONFIG
+    // CONFIG
     // ==========================================
     const CHAINS = {
       1: { name: 'Ethereum', rpc: 'https://eth.llamarpc.com', explorer: 'https://etherscan.io' },
@@ -243,87 +203,184 @@
     let account = null;
     let chainId = 1;
     let isSafeWallet = false;
+    let walletType = null; // 'safe' | 'browser' | 'walletconnect'
 
     // ==========================================
-    // INIT
+    // DETECT SAFE ENVIRONMENT
     // ==========================================
-    async function init() {
-      renderLoading('Connecting...');
-      
-      // Check for Safe environment
-      if (isInIframe()) {
-        console.log('In iframe, checking for Safe...');
-        try {
-          const info = await getSafeInfo();
-          if (info && info.safeAddress) {
-            isSafeWallet = true;
-            account = info.safeAddress;
-            chainId = info.chainId;
-            
-            // Try to get provider from window.ethereum (Safe injects this)
-            if (window.ethereum) {
-              try {
-                provider = new ethers.BrowserProvider(window.ethereum);
-                signer = await provider.getSigner();
-              } catch (e) {
-                console.log('Provider setup:', e.message);
-              }
-            }
-            
-            renderHeader();
-            scanApprovals();
-            return;
-          }
-        } catch (e) {
-          console.log('Safe detection error:', e.message);
-        }
+    function detectSafeEnvironment() {
+      // Safe Wallet runs in iframe and injects window.ethereum with specific properties
+      if (window.parent !== window) {
+        // We're in an iframe - likely Safe Wallet
+        console.log('In iframe (Safe environment detected)');
+        return true;
       }
       
-      // Not in Safe
-      renderWelcome();
+      // Check for Safe provider markers
+      if (window.ethereum && window.ethereum.isSafe) {
+        console.log('Safe provider detected via isSafe flag');
+        return true;
+      }
+      
+      // Check for Safe Apps SDK
+      if (window.__SAFE_APPS_SDK__) {
+        console.log('Safe Apps SDK detected');
+        return true;
+      }
+      
+      return false;
     }
 
     // ==========================================
-    // CONNECT
+    // MODAL
     // ==========================================
-    async function connectWallet() {
-      // Already connected to Safe
-      if (isSafeWallet && account) {
+    function openConnectModal() {
+      // Check if Safe environment first
+      const isSafe = detectSafeEnvironment();
+      document.getElementById('safeOption').style.display = isSafe ? 'flex' : 'none';
+      document.getElementById('connectModal').classList.add('active');
+    }
+
+    function closeConnectModal() {
+      document.getElementById('connectModal').classList.remove('active');
+    }
+
+    // Click outside to close
+    document.getElementById('connectModal').addEventListener('click', (e) => {
+      if (e.target.id === 'connectModal') closeConnectModal();
+    });
+
+    // ==========================================
+    // CONNECT: SAFE WALLET
+    // ==========================================
+    async function connectSafe() {
+      closeConnectModal();
+      renderLoading('Connecting to Safe Wallet...');
+      
+      try {
+        // In Safe environment, window.ethereum is the Safe provider
+        if (!window.ethereum) {
+          throw new Error('No wallet provider found. Please open this app inside Safe Wallet.');
+        }
+
+        provider = new ethers.BrowserProvider(window.ethereum);
+        const accounts = await provider.send('eth_requestAccounts', []);
+        
+        if (!accounts || accounts.length === 0) {
+          throw new Error('No accounts found in Safe Wallet');
+        }
+        
+        account = accounts[0];
+        signer = await provider.getSigner();
+        
+        const network = await provider.getNetwork();
+        chainId = Number(network.chainId);
+        isSafeWallet = true;
+        walletType = 'safe';
+
+        // Listen for changes
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+
+        console.log('✅ Connected to Safe:', account);
+        renderHeader();
         scanApprovals();
+      } catch (err) {
+        console.error('Safe connection error:', err);
+        renderError('Safe connection failed: ' + err.message);
+      }
+    }
+
+    // ==========================================
+    // CONNECT: BROWSER WALLET (MetaMask, etc)
+    // ==========================================
+    async function connectBrowserWallet() {
+      closeConnectModal();
+      
+      if (!window.ethereum) {
+        alert('Please install MetaMask or another browser wallet!');
         return;
       }
-      
-      // Try MetaMask
-      if (window.ethereum) {
-        try {
-          provider = new ethers.BrowserProvider(window.ethereum);
-          const accounts = await provider.send('eth_requestAccounts', []);
-          signer = await provider.getSigner();
-          account = accounts[0];
-          const network = await provider.getNetwork();
-          chainId = Number(network.chainId);
 
-          window.ethereum.on('accountsChanged', (acc) => {
-            if (acc.length === 0) disconnect();
-            else { account = acc[0]; renderHeader(); scanApprovals(); }
-          });
-          window.ethereum.on('chainChanged', (c) => {
-            chainId = parseInt(c, 16);
-            renderHeader();
-            scanApprovals();
-          });
+      renderLoading('Connecting to wallet...');
 
-          renderHeader();
-          scanApprovals();
-        } catch (err) {
-          alert('Connection failed: ' + err.message);
-        }
-      } else if (isInIframe()) {
-        // In iframe but Safe info not received yet
-        alert('Please connect via Safe Wallet interface');
-      } else {
-        alert('Please install MetaMask or open inside Safe Wallet!');
+      try {
+        provider = new ethers.BrowserProvider(window.ethereum);
+        const accounts = await provider.send('eth_requestAccounts', []);
+        
+        account = accounts[0];
+        signer = await provider.getSigner();
+        
+        const network = await provider.getNetwork();
+        chainId = Number(network.chainId);
+        isSafeWallet = false;
+        walletType = 'browser';
+
+        window.ethereum.on('accountsChanged', handleAccountsChanged);
+        window.ethereum.on('chainChanged', handleChainChanged);
+
+        console.log('✅ Connected to browser wallet:', account);
+        renderHeader();
+        scanApprovals();
+      } catch (err) {
+        renderError('Connection failed: ' + err.message);
       }
+    }
+
+    // ==========================================
+    // CONNECT: WALLETCONNECT
+    // ==========================================
+    async function connectWalletConnect() {
+      closeConnectModal();
+      
+      // WalletConnect requires a QR code modal library
+      // For static HTML, we'll show instructions
+      alert('WalletConnect requires a QR code library.\n\nFor now, please use:\n1. Browser Wallet (MetaMask)\n2. Or add this app directly in Safe Wallet');
+    }
+
+    // ==========================================
+    // SAFE INSTRUCTIONS
+    // ==========================================
+    function showSafeInstructions() {
+      closeConnectModal();
+      
+      const instructions = `
+🏠 How to add this dApp to Safe Wallet:
+
+1. Open Safe Wallet: https://app.safe.global
+2. Select your Safe wallet
+3. Go to "Apps" tab
+4. Click "Add custom Safe App"
+5. Paste this URL:
+   ${window.location.href}
+6. Click "Add"
+7. Click "Connect Wallet" → Select "Safe Wallet"
+
+Your Safe address will be used automatically!
+      `;
+      
+      alert(instructions);
+    }
+
+    // ==========================================
+    // HANDLERS
+    // ==========================================
+    function handleAccountsChanged(accounts) {
+      if (accounts.length === 0) {
+        disconnect();
+      } else {
+        account = accounts[0];
+        provider = new ethers.BrowserProvider(window.ethereum);
+        provider.getSigner().then(s => signer = s);
+        renderHeader();
+        scanApprovals();
+      }
+    }
+
+    function handleChainChanged(chain) {
+      chainId = parseInt(chain, 16);
+      renderHeader();
+      scanApprovals();
     }
 
     function disconnect() {
@@ -331,7 +388,7 @@
       provider = null;
       signer = null;
       isSafeWallet = false;
-      _safeInfo = null;
+      walletType = null;
       renderHeader();
       renderWelcome();
     }
@@ -383,38 +440,30 @@
     // REVOKE
     // ==========================================
     async function revokeApproval(tokenAddress, spender) {
-      const erc20Interface = new ethers.Interface(ERC20_ABI);
-      const data = erc20Interface.encodeFunctionData('approve', [spender, 0]);
-      
-      const tx = {
-        to: tokenAddress,
-        value: '0x0',
-        data: data,
-        operation: 0,
-      };
-
-      if (isSafeWallet) {
-        try {
-          const result = await sendSafeTransactions([tx]);
-          alert('✅ Transaction sent to Safe!\nMulti-sig proposal created.');
-          setTimeout(scanApprovals, 3000);
-        } catch (err) {
-          alert('Safe transaction failed: ' + err.message);
-        }
-        return;
-      }
-
       if (!signer) {
         alert('Connect wallet first!');
         return;
       }
 
+      const erc20Interface = new ethers.Interface(ERC20_ABI);
+      const data = erc20Interface.encodeFunctionData('approve', [spender, 0]);
+      
       try {
-        const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-        const txResult = await contract.approve(spender, 0);
-        alert('TX submitted: ' + txResult.hash);
-        await txResult.wait();
-        alert('Revoked!');
+        if (isSafeWallet) {
+          // Safe will handle the transaction through its interface
+          const tx = await signer.sendTransaction({
+            to: tokenAddress,
+            data: data,
+          });
+          alert('✅ Transaction submitted to Safe!\nMulti-sig approval required.\n\nTX: ' + tx.hash);
+        } else {
+          // Regular wallet
+          const contract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+          const tx = await contract.approve(spender, 0);
+          alert('TX submitted: ' + tx.hash);
+          await tx.wait();
+          alert('Revoked!');
+        }
         scanApprovals();
       } catch (err) {
         alert('Failed: ' + err.message);
@@ -427,10 +476,11 @@
     function renderHeader() {
       const el = document.getElementById('header-actions');
       if (account) {
-        const short = account.slice(0, 6) + '...' + account.slice(-4);
+        const short = account.slice(0, 6) + '...'+ account.slice(-4);
+        const badge = isSafeWallet ? '<span class="safe-badge">🏠 Safe</span>' : '';
         el.innerHTML = `
           <div class="wallet-info">
-            ${isSafeWallet ? '<span class="safe-badge">🏠 Safe</span>' : ''}
+            ${badge}
             <select onchange="switchChain(this.value)" ${isSafeWallet ? 'disabled' : ''}>
               ${Object.entries(CHAINS).map(([id, c]) => 
                 `<option value="${id}" ${id == chainId ? 'selected' : ''}>${c.name}</option>`
@@ -441,7 +491,7 @@
           </div>
         `;
       } else {
-        el.innerHTML = '<button class="btn btn-primary" onclick="connectWallet()">🔗 Connect Wallet</button>';
+        el.innerHTML = '<button class="btn btn-primary" onclick="openConnectModal()">🔗 Connect Wallet</button>';
       }
     }
 
@@ -472,7 +522,7 @@
       const explorer = CHAINS[chainId]?.explorer || 'https://etherscan.io';
 
       document.getElementById('content').innerHTML = `
-        ${isSafeWallet ? '<div class="alert alert-info">🏠 <strong>Connected via Safe Wallet</strong> — Revoke transactions require multi-sig approval.</div>' : ''}
+        ${isSafeWallet ? '<div class="alert alert-info">🏠 <strong>Connected via Safe Wallet</strong> — Transactions require multi-sig approval.</div>' : ''}
         <div class="summary">
           <div class="stat-card"><div class="stat-value">${approvals.length}</div><div class="stat-label">Total</div></div>
           <div class="stat-card stat-safe"><div class="stat-value">${safe}</div><div class="stat-label">🟢 Safe</div></div>
@@ -512,29 +562,8 @@
           <div class="empty">
             <div class="empty-icon">🔐</div>
             <h2>Connect Your Wallet</h2>
-            <p style="color: var(--text-secondary); margin-top: 8px;">Scan and manage token approvals</p>
-            <div class="connect-options">
-              <div class="connect-card" onclick="connectWallet()">
-                <div class="connect-icon">🦊</div>
-                <h3>MetaMask</h3>
-                <p>Browser extension</p>
-              </div>
-              <div class="connect-card" onclick="document.getElementById('safeHint').style.display='block'">
-                <div class="connect-icon">🏠</div>
-                <h3>Safe Wallet</h3>
-                <p>Multi-sig wallet</p>
-              </div>
-            </div>
-            <div id="safeHint" style="display:none; margin-top: 24px; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto;">
-              <div class="alert alert-info">
-                <strong>How to use with Safe:</strong><br><br>
-                1. Open <a href="https://app.safe.global" target="_blank" style="color: var(--safe-blue);">app.safe.global</a><br>
-                2. Go to <strong>Apps</strong> tab<br>
-                3. Click <strong>"Add custom Safe App"</strong><br>
-                4. Paste: <code style="background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;">${window.location.href}</code><br>
-                5. Click <strong>Add</strong>
-              </div>
-            </div>
+            <p style="color: var(--text-secondary); margin-top: 8px;">Scan and manage token approvals for your wallet</p>
+            <button class="btn btn-primary" style="margin-top: 24px;" onclick="openConnectModal()">🔗 Connect Wallet</button>
           </div>
         </div>
         <div class="card">
@@ -547,7 +576,60 @@
             <li>⛓️ 10 chains: ETH, Arbitrum, Base, Polygon, Optimism, zkSync, Linea, BNB, Avalanche, Gnosis</li>
           </ul>
         </div>
+        <div class="card">
+          <h3 class="card-title">🏠 Safe Wallet Users</h3>
+          <p style="color: var(--text-secondary); margin-top: 8px; line-height: 1.8;">
+            To use with Safe Wallet:<br>
+            1. Open <a href="https://app.safe.global" target="_blank" style="color: var(--safe-blue);">app.safe.global</a><br>
+            2. Go to <strong>Apps</strong> → <strong>Add custom Safe App</strong><br>
+            3. Paste URL: <code style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 4px;">${window.location.href}</code><br>
+            4. Connect and scan!
+          </p>
+        </div>
       `;
+    }
+
+    // ==========================================
+    // INIT - Auto-detect Safe
+    // ==========================================
+    async function init() {
+      // Check if in Safe iframe
+      if (detectSafeEnvironment()) {
+        console.log('🏠 Safe environment detected, auto-connecting...');
+        renderLoading('Safe Wallet detected. Connecting...');
+        
+        // Wait a bit for Safe to initialize
+        await new Promise(r => setTimeout(r, 500));
+        
+        if (window.ethereum) {
+          try {
+            provider = new ethers.BrowserProvider(window.ethereum);
+            const accounts = await provider.send('eth_requestAccounts', []);
+            
+            if (accounts && accounts.length > 0) {
+              account = accounts[0];
+              signer = await provider.getSigner();
+              const network = await provider.getNetwork();
+              chainId = Number(network.chainId);
+              isSafeWallet = true;
+              walletType = 'safe';
+
+              window.ethereum.on('accountsChanged', handleAccountsChanged);
+              window.ethereum.on('chainChanged', handleChainChanged);
+
+              console.log('✅ Auto-connected to Safe:', account);
+              renderHeader();
+              scanApprovals();
+              return;
+            }
+          } catch (e) {
+            console.log('Auto-connect failed:', e.message);
+          }
+        }
+      }
+      
+      // Not in Safe or auto-connect failed
+      renderWelcome();
     }
 
     // START
